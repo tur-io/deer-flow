@@ -455,6 +455,8 @@ For models with `supports_vision: true`:
 - `view_image_tool` added to agent's toolset
 - Images automatically converted to base64 and injected into state
 
+- CLI packaging is configured via `setuptools.build_meta` in `pyproject.toml` so `uv run deerflow ...` resolves the `deerflow` entrypoint correctly.
+
 ## Code Style
 
 - Uses `ruff` for linting and formatting
