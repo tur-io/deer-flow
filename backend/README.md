@@ -311,6 +311,8 @@ make format     # Format code (ruff)
 uv run deerflow models auth login --provider openai-codex --set-default  # Add/update OpenAI Codex model in config.yaml
 ```
 
+- CLI packaging is configured via `setuptools.build_meta` in `pyproject.toml` so `uv run deerflow ...` resolves the `deerflow` entrypoint correctly.
+
 ### Code Style
 
 - **Linter/Formatter**: `ruff`
