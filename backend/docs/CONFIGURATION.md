@@ -25,6 +25,31 @@ models:
 - DeepSeek (`langchain_deepseek:ChatDeepSeek`)
 - Any LangChain-compatible provider
 
+For providers that require OAuth token exchange, you can configure model-level OAuth:
+This does **not** require configuring an MCP server. OAuth is applied directly during model client initialization.
+
+
+```yaml
+models:
+  - name: codex-oauth
+    use: langchain_openai:ChatOpenAI
+    model: codex-mini-latest
+    base_url: https://api.openai.com/v1
+    api_key: $OPENAI_REFRESH_TOKEN
+    oauth:
+      token_url: https://auth.example.com/oauth/token
+      grant_type: refresh_token
+      refresh_skew_seconds: 60
+      token_request_format: json
+      token_request_headers:
+        content-type: application/json
+      # refresh_token is optional here; when omitted, `api_key` is reused
+```
+
+Tokens are cached per model+OAuth-config and refreshed when near expiry (`refresh_skew_seconds`).
+
+If your OAuth provider expects JSON payloads instead of form-encoded payloads, set `token_request_format: json` and optional `token_request_headers`.
+
 For OpenAI-compatible gateways (for example Novita), keep using `langchain_openai:ChatOpenAI` and set `base_url`:
 
 ```yaml

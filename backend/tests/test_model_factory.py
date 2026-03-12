@@ -410,3 +410,413 @@ def test_thinking_shortcut_not_leaked_into_model_when_disabled(monkeypatch):
 
     # The disable path should have set thinking to disabled (not the raw enabled shortcut)
     assert captured.get("thinking") == {"type": "disabled"}
+
+
+def test_model_oauth_refresh_token_uses_api_key_as_refresh_token(monkeypatch):
+    cfg = _make_app_config(
+        [
+            ModelConfig(
+                name="oauth-model",
+                display_name="oauth-model",
+                description=None,
+                use="langchain_openai:ChatOpenAI",
+                model="oauth-model",
+                api_key="seed-refresh-token",
+                oauth={
+                    "enabled": True,
+                    "token_url": "https://auth.example.com/oauth/token",
+                    "grant_type": "refresh_token",
+                },
+                supports_vision=False,
+            )
+        ]
+    )
+    _patch_factory(monkeypatch, cfg)
+
+
+    captured: dict = {}
+
+    class CapturingModel(FakeChatModel):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            BaseChatModel.__init__(self, **kwargs)
+
+    monkeypatch.setattr(factory_module, "resolve_class", lambda path, base: CapturingModel)
+
+    # Patch injector to avoid async invocation path in this unit test while keeping behavior coverage.
+
+    def fake_inject(model_name, settings, oauth):
+        assert model_name == "oauth-model"
+        resolved = factory_module._resolve_oauth_model_credentials(settings, oauth)
+        assert resolved.refresh_token == "seed-refresh-token"
+        updated = dict(settings)
+        updated["api_key"] = "fresh-access-token"
+        updated["default_headers"] = {"Authorization": "Bearer fresh-access-token"}
+        return updated
+
+    monkeypatch.setattr(factory_module, "_inject_model_oauth_credentials", fake_inject)
+
+    factory_module.create_chat_model(name="oauth-model", thinking_enabled=False)
+
+    assert captured.get("api_key") == "fresh-access-token"
+    assert captured.get("default_headers") == {"Authorization": "Bearer fresh-access-token"}
+
+
+def test_resolve_oauth_model_credentials_keeps_explicit_refresh_token():
+    settings = {"api_key": "seed-refresh-token"}
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "refresh_token",
+            "refresh_token": "explicit-refresh",
+        },
+    ).oauth
+
+    assert oauth is not None
+    resolved = factory_module._resolve_oauth_model_credentials(settings, oauth)
+    assert resolved.refresh_token == "explicit-refresh"
+
+
+def test_resolve_oauth_model_credentials_leaves_non_refresh_grants_unchanged():
+    settings = {"api_key": "seed-refresh-token"}
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id",
+            "client_secret": "secret",
+        },
+    ).oauth
+
+    assert oauth is not None
+    resolved = factory_module._resolve_oauth_model_credentials(settings, oauth)
+    assert resolved.refresh_token is None
+
+
+
+def test_build_oauth_token_request_data_client_credentials():
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "scope": "scope-a",
+            "audience": "aud-1",
+            "extra_token_params": {"resource": "codex"},
+        },
+    ).oauth
+    assert oauth is not None
+
+    data = factory_module._build_oauth_token_request_data(oauth)
+
+    assert data == {
+        "grant_type": "client_credentials",
+        "client_id": "client-id",
+        "client_secret": "client-secret",
+        "scope": "scope-a",
+        "audience": "aud-1",
+        "resource": "codex",
+    }
+
+
+def test_build_oauth_token_request_data_refresh_token_requires_refresh_token():
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "refresh_token",
+        },
+    ).oauth
+    assert oauth is not None
+
+    with pytest.raises(ValueError, match="requires refresh_token"):
+        factory_module._build_oauth_token_request_data(oauth)
+
+
+def test_fetch_oauth_access_token_parses_custom_fields(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "refresh_token",
+            "refresh_token": "r1",
+            "token_field": "token",
+            "token_type_field": "typ",
+            "default_token_type": "Bearer",
+        },
+    ).oauth
+    assert oauth is not None
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"token": "abc123", "typ": "Bearer"}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(factory_module.httpx, "Client", lambda timeout: _Client())
+
+    token = factory_module._fetch_oauth_access_token(oauth)
+    assert token.token_type == "Bearer"
+    assert token.access_token == "abc123"
+
+
+def test_get_cached_or_fetch_oauth_token_uses_cache_until_expiring(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id",
+            "client_secret": "secret",
+            "refresh_skew_seconds": 30,
+        },
+    ).oauth
+    assert oauth is not None
+
+    factory_module._MODEL_OAUTH_TOKEN_CACHE.clear()
+    calls = {"n": 0}
+
+    def fake_fetch(_):
+        calls["n"] += 1
+        access_token = "t" + str(calls["n"])
+        return factory_module._ModelOAuthToken(
+            token_type="Bearer",
+            access_token=access_token,
+            expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=3600),
+        )
+
+    monkeypatch.setattr(factory_module, "_fetch_oauth_access_token", fake_fetch)
+
+    a = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
+    b = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
+
+    assert calls["n"] == 1
+    assert a.access_token == "t1"
+    assert b.access_token == "t1"
+
+
+def test_get_cached_or_fetch_oauth_token_refreshes_when_expiring(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id",
+            "client_secret": "secret",
+            "refresh_skew_seconds": 60,
+        },
+    ).oauth
+    assert oauth is not None
+
+    factory_module._MODEL_OAUTH_TOKEN_CACHE.clear()
+    near_expiry = factory_module._ModelOAuthToken(
+        token_type="Bearer",
+        access_token="old",
+        expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=5),
+    )
+    cache_key = factory_module._oauth_cache_key("model-a", oauth)
+    factory_module._MODEL_OAUTH_TOKEN_CACHE[cache_key] = near_expiry
+
+    monkeypatch.setattr(
+        factory_module,
+        "_fetch_oauth_access_token",
+        lambda _: factory_module._ModelOAuthToken(
+            token_type="Bearer",
+            access_token="new",
+            expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=3600),
+        ),
+    )
+
+    token = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
+
+    assert token.access_token == "new"
+
+
+def test_oauth_cache_key_changes_with_oauth_configuration():
+    base = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-1",
+            "client_secret": "secret",
+        },
+    ).oauth
+    changed = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-2",
+            "client_secret": "secret",
+        },
+    ).oauth
+
+    assert base is not None
+    assert changed is not None
+
+    key_a = factory_module._oauth_cache_key("model-a", base)
+    key_b = factory_module._oauth_cache_key("model-a", changed)
+
+    assert key_a != key_b
+
+
+def test_fetch_oauth_access_token_supports_json_request_format(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "refresh_token",
+            "refresh_token": "r1",
+            "token_request_format": "json",
+            "token_request_headers": {"x-test": "1"},
+        },
+    ).oauth
+    assert oauth is not None
+
+    captured_kwargs = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"access_token": "abc123", "token_type": "Bearer"}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _Resp()
+
+    monkeypatch.setattr(factory_module.httpx, "Client", lambda timeout: _Client())
+
+    token = factory_module._fetch_oauth_access_token(oauth)
+
+    assert token.access_token == "abc123"
+    assert "json" in captured_kwargs
+    assert "data" not in captured_kwargs
+    assert captured_kwargs.get("headers") == {"x-test": "1"}
+
+
+def test_oauth_cache_key_changes_with_request_format():
+    form_oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-1",
+            "client_secret": "secret",
+            "token_request_format": "form",
+        },
+    ).oauth
+    json_oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-1",
+            "client_secret": "secret",
+            "token_request_format": "json",
+        },
+    ).oauth
+
+    assert form_oauth is not None
+    assert json_oauth is not None
+
+    form_key = factory_module._oauth_cache_key("model-a", form_oauth)
+    json_key = factory_module._oauth_cache_key("model-a", json_oauth)
+
+    assert form_key != json_key
