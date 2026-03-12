@@ -86,6 +86,7 @@ make gateway    # Run Gateway API only (port 8001)
 make test       # Run all backend tests
 make lint       # Lint with ruff
 make format     # Format code with ruff
+uv run deerflow models auth login --provider openai-codex --set-default  # Add/update OpenAI Codex model in config.yaml
 ```
 
 Regression tests related to Docker/provisioner behavior:
