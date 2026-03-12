@@ -91,3 +91,29 @@ def test_models_auth_login_accepts_empty_models_object(tmp_path):
     data = _read_config(config_path)
     assert len(data["models"]) == 1
     assert data["models"][0]["name"] == "openai-codex"
+
+
+def test_models_auth_login_prints_token_setup_steps_when_env_missing(tmp_path, monkeypatch, capsys):
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, {"models": []})
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    exit_code = cli.main(["models", "auth", "login", "--provider", "openai-codex", "--config", str(config_path)])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "https://platform.openai.com/api-keys" in out
+    assert "export OPENAI_API_KEY='sk-...'" in out
+
+
+def test_models_auth_login_detects_existing_openai_key(tmp_path, monkeypatch, capsys):
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, {"models": []})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
+
+    exit_code = cli.main(["models", "auth", "login", "--provider", "openai-codex", "--config", str(config_path)])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Detected OPENAI_API_KEY in environment" in out
+    assert "ready to start DeerFlow" in out

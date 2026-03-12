@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,22 @@ def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool
     return created, f"{action} model '{OPENAI_CODEX_PROVIDER}' in config.yaml"
 
 
+def _print_openai_codex_auth_next_steps() -> None:
+    existing_key = os.getenv("OPENAI_API_KEY")
+    if existing_key:
+        masked = f"{existing_key[:7]}..." if len(existing_key) > 10 else "(set)"
+        print(f"Detected OPENAI_API_KEY in environment: {masked}")
+        print("You're ready to start DeerFlow with OpenAI Codex.")
+        return
+
+    print("Next step: create an OpenAI API key and set OPENAI_API_KEY before starting DeerFlow.")
+    print("1) Create a key at: https://platform.openai.com/api-keys")
+    print("2) Set it for your current shell:")
+    print("   export OPENAI_API_KEY='sk-...'")
+    print("3) Optional: persist it in a local .env file:")
+    print("   echo \"OPENAI_API_KEY=sk-...\" >> .env")
+
+
 def _cmd_models_auth_login(args: argparse.Namespace) -> int:
     if args.provider != OPENAI_CODEX_PROVIDER:
         raise ValueError(f"Unsupported provider '{args.provider}'. Currently supported: {OPENAI_CODEX_PROVIDER}")
@@ -104,7 +121,7 @@ def _cmd_models_auth_login(args: argparse.Namespace) -> int:
 
     print(message)
     print(f"Config updated: {config_path}")
-    print("Next step: set OPENAI_API_KEY in your environment before starting DeerFlow.")
+    _print_openai_codex_auth_next_steps()
     return 0
 
 
