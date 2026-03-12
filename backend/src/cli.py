@@ -24,10 +24,42 @@ def _save_yaml(path: Path, data: dict[str, Any]) -> None:
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
 
 
-def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool) -> tuple[bool, str]:
-    models = config_data.setdefault("models", [])
+def _ensure_models_list(config_data: dict[str, Any]) -> list[dict[str, Any]]:
+    models = config_data.get("models")
+
+    if models is None:
+        models = []
+    elif isinstance(models, dict):
+        nested_models = models.get("models") if isinstance(models.get("models"), list) else None
+        nested_providers = models.get("providers") if isinstance(models.get("providers"), list) else None
+
+        if nested_models is not None:
+            models = nested_models
+        elif nested_providers is not None:
+            models = nested_providers
+        else:
+            converted_models: list[dict[str, Any]] = []
+            for name, item in models.items():
+                if not isinstance(item, dict):
+                    continue
+                converted = dict(item)
+                converted.setdefault("name", name)
+                converted_models.append(converted)
+            models = converted_models
+
     if not isinstance(models, list):
-        raise ValueError("'models' must be a list in config.yaml")
+        raise ValueError("'models' must be a list or object in config.yaml")
+
+    for idx, item in enumerate(models):
+        if not isinstance(item, dict):
+            raise ValueError(f"'models[{idx}]' must be a YAML object")
+
+    config_data["models"] = models
+    return models
+
+
+def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool) -> tuple[bool, str]:
+    models = _ensure_models_list(config_data)
 
     model_entry = {
         "name": OPENAI_CODEX_PROVIDER,
