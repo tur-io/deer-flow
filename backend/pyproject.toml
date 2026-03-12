@@ -41,5 +41,8 @@ dependencies = [
     "markdown-to-mrkdwn>=0.3.1",
 ]
 
+[project.scripts]
+deerflow = "src.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8.0.0", "ruff>=0.14.11"]

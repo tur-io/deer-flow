@@ -308,6 +308,7 @@ make dev        # Run LangGraph server (port 2024)
 make gateway    # Run Gateway API (port 8001)
 make lint       # Run linter (ruff)
 make format     # Format code (ruff)
+uv run deerflow models auth login --provider openai-codex --set-default  # Add/update OpenAI Codex model in config.yaml
 ```
 
 ### Code Style

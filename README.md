@@ -96,7 +96,12 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
        temperature: 0.7                  # Sampling temperature
    ```
 
-  
+   For an OpenAI Codex preset, you can now run:
+
+   ```bash
+   cd backend && uv run deerflow models auth login --provider openai-codex --set-default
+   ```
+
 4. **Set API keys for your configured model(s)**
 
    Choose one of the following methods:
