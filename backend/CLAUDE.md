@@ -226,6 +226,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - **Transports**: stdio (command-based), SSE, HTTP
 - **OAuth (HTTP/SSE)**: Supports token endpoint flows (`client_credentials`, `refresh_token`) with automatic token refresh + Authorization header injection
 - **Model OAuth**: `models[].oauth` supports provider token endpoint flows (`client_credentials`, `refresh_token`) and injects short-lived access tokens into model initialization (`api_key` + `default_headers.Authorization`)
+  - Tokens are cached per model and refreshed before expiry (`refresh_skew_seconds`)
   - This is independent of MCP servers; no MCP server setup is required for model OAuth
 - **Runtime updates**: Gateway API saves to extensions_config.json; LangGraph detects via mtime
 

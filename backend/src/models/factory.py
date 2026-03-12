@@ -1,4 +1,7 @@
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from threading import Lock
 
 import httpx
 from langchain.chat_models import BaseChatModel
@@ -8,6 +11,17 @@ from src.config.model_config import ModelOAuthConfig
 from src.reflection import resolve_class
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ModelOAuthToken:
+    token_type: str
+    access_token: str
+    expires_at: datetime
+
+
+_MODEL_OAUTH_TOKEN_CACHE: dict[str, _ModelOAuthToken] = {}
+_MODEL_OAUTH_CACHE_LOCK = Lock()
 
 
 def _resolve_oauth_model_credentials(model_settings: dict, oauth: ModelOAuthConfig) -> ModelOAuthConfig:
@@ -56,7 +70,24 @@ def _build_oauth_token_request_data(oauth: ModelOAuthConfig) -> dict[str, str]:
     return data
 
 
-def _fetch_oauth_access_token(oauth: ModelOAuthConfig) -> tuple[str, str]:
+def _parse_oauth_token_payload(payload: dict, oauth: ModelOAuthConfig) -> _ModelOAuthToken:
+    access_token_raw = payload.get(oauth.token_field)
+    if not access_token_raw:
+        raise ValueError(f"OAuth token response missing '{oauth.token_field}'")
+
+    token_type = str(payload.get(oauth.token_type_field, oauth.default_token_type) or oauth.default_token_type)
+
+    expires_in_raw = payload.get(oauth.expires_in_field, 3600)
+    try:
+        expires_in = int(expires_in_raw)
+    except (TypeError, ValueError):
+        expires_in = 3600
+
+    expires_at = datetime.now(UTC) + timedelta(seconds=max(expires_in, 0))
+    return _ModelOAuthToken(token_type=token_type, access_token=str(access_token_raw), expires_at=expires_at)
+
+
+def _fetch_oauth_access_token(oauth: ModelOAuthConfig) -> _ModelOAuthToken:
     data = _build_oauth_token_request_data(oauth)
 
     with httpx.Client(timeout=30) as client:
@@ -64,26 +95,37 @@ def _fetch_oauth_access_token(oauth: ModelOAuthConfig) -> tuple[str, str]:
         response.raise_for_status()
         payload = response.json()
 
-    access_token = payload.get(oauth.token_field)
-    if not access_token:
-        raise ValueError(f"OAuth token response missing '{oauth.token_field}'")
-
-    token_type = str(payload.get(oauth.token_type_field, oauth.default_token_type) or oauth.default_token_type)
-    return token_type, str(access_token)
+    return _parse_oauth_token_payload(payload, oauth)
 
 
-def _inject_model_oauth_credentials(model_settings: dict, oauth: ModelOAuthConfig | None) -> dict:
+def _is_token_expiring(token: _ModelOAuthToken, oauth: ModelOAuthConfig) -> bool:
+    now = datetime.now(UTC)
+    return token.expires_at <= now + timedelta(seconds=max(oauth.refresh_skew_seconds, 0))
+
+
+def _get_cached_or_fetch_oauth_token(model_name: str, oauth: ModelOAuthConfig) -> _ModelOAuthToken:
+    with _MODEL_OAUTH_CACHE_LOCK:
+        cached = _MODEL_OAUTH_TOKEN_CACHE.get(model_name)
+        if cached and not _is_token_expiring(cached, oauth):
+            return cached
+
+        fresh = _fetch_oauth_access_token(oauth)
+        _MODEL_OAUTH_TOKEN_CACHE[model_name] = fresh
+        return fresh
+
+
+def _inject_model_oauth_credentials(model_name: str, model_settings: dict, oauth: ModelOAuthConfig | None) -> dict:
     if oauth is None or not oauth.enabled:
         return model_settings
 
     resolved_oauth = _resolve_oauth_model_credentials(model_settings, oauth)
-    token_type, access_token = _fetch_oauth_access_token(resolved_oauth)
+    token = _get_cached_or_fetch_oauth_token(model_name, resolved_oauth)
 
     updated = dict(model_settings)
-    updated["api_key"] = access_token
+    updated["api_key"] = token.access_token
 
     headers = dict(updated.get("default_headers") or {})
-    headers["Authorization"] = f"{token_type} {access_token}".strip()
+    headers["Authorization"] = f"{token.token_type} {token.access_token}".strip()
     updated["default_headers"] = headers
 
     return updated
@@ -120,7 +162,7 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             "oauth",
         },
     )
-    model_settings_from_config = _inject_model_oauth_credentials(model_settings_from_config, model_config.oauth)
+    model_settings_from_config = _inject_model_oauth_credentials(name, model_settings_from_config, model_config.oauth)
     # Compute effective when_thinking_enabled by merging in the `thinking` shortcut field.
     # The `thinking` shortcut is equivalent to setting when_thinking_enabled["thinking"].
     has_thinking_settings = (model_config.when_thinking_enabled is not None) or (model_config.thinking is not None)

@@ -39,8 +39,11 @@ models:
     oauth:
       token_url: https://auth.example.com/oauth/token
       grant_type: refresh_token
+      refresh_skew_seconds: 60
       # refresh_token is optional here; when omitted, `api_key` is reused
 ```
+
+Tokens are cached per model and refreshed when near expiry (`refresh_skew_seconds`).
 
 For OpenAI-compatible gateways (for example Novita), keep using `langchain_openai:ChatOpenAI` and set `base_url`:
 

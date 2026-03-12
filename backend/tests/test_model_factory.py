@@ -445,7 +445,8 @@ def test_model_oauth_refresh_token_uses_api_key_as_refresh_token(monkeypatch):
 
     # Patch injector to avoid async invocation path in this unit test while keeping behavior coverage.
 
-    def fake_inject(settings, oauth):
+    def fake_inject(model_name, settings, oauth):
+        assert model_name == "oauth-model"
         resolved = factory_module._resolve_oauth_model_credentials(settings, oauth)
         assert resolved.refresh_token == "seed-refresh-token"
         updated = dict(settings)
@@ -599,6 +600,89 @@ def test_fetch_oauth_access_token_parses_custom_fields(monkeypatch):
 
     monkeypatch.setattr(factory_module.httpx, "Client", lambda timeout: _Client())
 
-    token_type, access_token = factory_module._fetch_oauth_access_token(oauth)
-    assert token_type == "Bearer"
-    assert access_token == "abc123"
+    token = factory_module._fetch_oauth_access_token(oauth)
+    assert token.token_type == "Bearer"
+    assert token.access_token == "abc123"
+
+
+def test_get_cached_or_fetch_oauth_token_uses_cache_until_expiring(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id",
+            "client_secret": "secret",
+            "refresh_skew_seconds": 30,
+        },
+    ).oauth
+    assert oauth is not None
+
+    factory_module._MODEL_OAUTH_TOKEN_CACHE.clear()
+    calls = {"n": 0}
+
+    def fake_fetch(_):
+        calls["n"] += 1
+        access_token = "t" + str(calls["n"])
+        return factory_module._ModelOAuthToken(
+            token_type="Bearer",
+            access_token=access_token,
+            expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=3600),
+        )
+
+    monkeypatch.setattr(factory_module, "_fetch_oauth_access_token", fake_fetch)
+
+    a = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
+    b = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
+
+    assert calls["n"] == 1
+    assert a.access_token == "t1"
+    assert b.access_token == "t1"
+
+
+def test_get_cached_or_fetch_oauth_token_refreshes_when_expiring(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id",
+            "client_secret": "secret",
+            "refresh_skew_seconds": 60,
+        },
+    ).oauth
+    assert oauth is not None
+
+    factory_module._MODEL_OAUTH_TOKEN_CACHE.clear()
+    near_expiry = factory_module._ModelOAuthToken(
+        token_type="Bearer",
+        access_token="old",
+        expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=5),
+    )
+    factory_module._MODEL_OAUTH_TOKEN_CACHE["model-a"] = near_expiry
+
+    monkeypatch.setattr(
+        factory_module,
+        "_fetch_oauth_access_token",
+        lambda _: factory_module._ModelOAuthToken(
+            token_type="Bearer",
+            access_token="new",
+            expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=3600),
+        ),
+    )
+
+    token = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
+
+    assert token.access_token == "new"

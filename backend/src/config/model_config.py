@@ -20,6 +20,7 @@ class ModelOAuthConfig(BaseModel):
     token_field: str = Field(default="access_token", description="Field name containing access token in token response")
     token_type_field: str = Field(default="token_type", description="Field name containing token type in token response")
     expires_in_field: str = Field(default="expires_in", description="Field name containing expiry (seconds) in token response")
+    refresh_skew_seconds: int = Field(default=60, description="Refresh token this many seconds before expiry")
     default_token_type: str = Field(default="Bearer", description="Default token type when missing in token response")
     extra_token_params: dict[str, str] = Field(default_factory=dict, description="Additional form params sent to token endpoint")
     model_config = ConfigDict(extra="allow")
