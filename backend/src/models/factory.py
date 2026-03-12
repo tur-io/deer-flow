@@ -34,6 +34,7 @@ def _oauth_cache_key(model_name: str, oauth: ModelOAuthConfig) -> str:
             oauth.client_id or "",
             oauth.scope or "",
             oauth.audience or "",
+            oauth.token_request_format,
         ]
     )
 
@@ -103,9 +104,13 @@ def _parse_oauth_token_payload(payload: dict, oauth: ModelOAuthConfig) -> _Model
 
 def _fetch_oauth_access_token(oauth: ModelOAuthConfig) -> _ModelOAuthToken:
     data = _build_oauth_token_request_data(oauth)
+    headers = dict(oauth.token_request_headers)
 
     with httpx.Client(timeout=30) as client:
-        response = client.post(oauth.token_url, data=data)
+        if oauth.token_request_format == "json":
+            response = client.post(oauth.token_url, json=data, headers=headers or None)
+        else:
+            response = client.post(oauth.token_url, data=data, headers=headers or None)
         response.raise_for_status()
         payload = response.json()
 

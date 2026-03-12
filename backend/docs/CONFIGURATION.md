@@ -40,10 +40,15 @@ models:
       token_url: https://auth.example.com/oauth/token
       grant_type: refresh_token
       refresh_skew_seconds: 60
+      token_request_format: json
+      token_request_headers:
+        content-type: application/json
       # refresh_token is optional here; when omitted, `api_key` is reused
 ```
 
 Tokens are cached per model+OAuth-config and refreshed when near expiry (`refresh_skew_seconds`).
+
+If your OAuth provider expects JSON payloads instead of form-encoded payloads, set `token_request_format: json` and optional `token_request_headers`.
 
 For OpenAI-compatible gateways (for example Novita), keep using `langchain_openai:ChatOpenAI` and set `base_url`:
 

@@ -201,6 +201,7 @@ See the [MCP Server Guide](backend/docs/MCP_SERVER.md) for detailed instructions
 Model provider OAuth token flows are also supported in `config.yaml` using a model-level `oauth` block (for OpenAI-compatible providers, `refresh_token` can reuse `api_key` as the refresh token source).
 This is independent of MCP server configuration.
 Model OAuth tokens are cached per model/config combination and refreshed before expiry.
+Model OAuth token requests support both form-encoded and JSON payload formats for provider compatibility.
 
 #### IM Channels
 

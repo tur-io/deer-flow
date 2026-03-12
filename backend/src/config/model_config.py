@@ -22,7 +22,9 @@ class ModelOAuthConfig(BaseModel):
     expires_in_field: str = Field(default="expires_in", description="Field name containing expiry (seconds) in token response")
     refresh_skew_seconds: int = Field(default=60, description="Refresh token this many seconds before expiry")
     default_token_type: str = Field(default="Bearer", description="Default token type when missing in token response")
-    extra_token_params: dict[str, str] = Field(default_factory=dict, description="Additional form params sent to token endpoint")
+    token_request_format: Literal["form", "json"] = Field(default="form", description="Token endpoint payload format")
+    token_request_headers: dict[str, str] = Field(default_factory=dict, description="Additional HTTP headers for token endpoint requests")
+    extra_token_params: dict[str, str] = Field(default_factory=dict, description="Additional params sent to token endpoint")
     model_config = ConfigDict(extra="allow")
 
 

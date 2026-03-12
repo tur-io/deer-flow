@@ -728,3 +728,95 @@ def test_oauth_cache_key_changes_with_oauth_configuration():
     key_b = factory_module._oauth_cache_key("model-a", changed)
 
     assert key_a != key_b
+
+
+def test_fetch_oauth_access_token_supports_json_request_format(monkeypatch):
+    oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "refresh_token",
+            "refresh_token": "r1",
+            "token_request_format": "json",
+            "token_request_headers": {"x-test": "1"},
+        },
+    ).oauth
+    assert oauth is not None
+
+    captured_kwargs = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"access_token": "abc123", "token_type": "Bearer"}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _Resp()
+
+    monkeypatch.setattr(factory_module.httpx, "Client", lambda timeout: _Client())
+
+    token = factory_module._fetch_oauth_access_token(oauth)
+
+    assert token.access_token == "abc123"
+    assert "json" in captured_kwargs
+    assert "data" not in captured_kwargs
+    assert captured_kwargs.get("headers") == {"x-test": "1"}
+
+
+def test_oauth_cache_key_changes_with_request_format():
+    form_oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-1",
+            "client_secret": "secret",
+            "token_request_format": "form",
+        },
+    ).oauth
+    json_oauth = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-1",
+            "client_secret": "secret",
+            "token_request_format": "json",
+        },
+    ).oauth
+
+    assert form_oauth is not None
+    assert json_oauth is not None
+
+    form_key = factory_module._oauth_cache_key("model-a", form_oauth)
+    json_key = factory_module._oauth_cache_key("model-a", json_oauth)
+
+    assert form_key != json_key
