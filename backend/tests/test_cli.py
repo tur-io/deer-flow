@@ -59,3 +59,35 @@ def test_models_auth_login_rejects_unknown_provider(tmp_path):
         assert "Unsupported provider" in str(exc)
     else:
         raise AssertionError("Expected ValueError for unsupported provider")
+
+
+def test_models_auth_login_accepts_models_object_mapping(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        {
+            "models": {
+                "gpt-4": {"use": "langchain_openai:ChatOpenAI", "model": "gpt-4", "api_key": "$OPENAI_API_KEY"}
+            }
+        },
+    )
+
+    exit_code = cli.main(["models", "auth", "login", "--provider", "openai-codex", "--set-default", "--config", str(config_path)])
+
+    assert exit_code == 0
+    data = _read_config(config_path)
+    assert isinstance(data["models"], list)
+    assert data["models"][0]["name"] == "openai-codex"
+    assert any(model["name"] == "gpt-4" for model in data["models"])
+
+
+def test_models_auth_login_accepts_empty_models_object(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, {"models": {}})
+
+    exit_code = cli.main(["models", "auth", "login", "--provider", "openai-codex", "--config", str(config_path)])
+
+    assert exit_code == 0
+    data = _read_config(config_path)
+    assert len(data["models"]) == 1
+    assert data["models"][0]["name"] == "openai-codex"
