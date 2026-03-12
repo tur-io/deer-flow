@@ -198,6 +198,8 @@ See the [Sandbox Configuration Guide](backend/docs/CONFIGURATION.md#sandbox) to 
 DeerFlow supports configurable MCP servers and skills to extend its capabilities.
 For HTTP/SSE MCP servers, OAuth token flows are supported (`client_credentials`, `refresh_token`).
 See the [MCP Server Guide](backend/docs/MCP_SERVER.md) for detailed instructions.
+Model provider OAuth token flows are also supported in `config.yaml` using a model-level `oauth` block (for OpenAI-compatible providers, `refresh_token` can reuse `api_key` as the refresh token source).
+This is independent of MCP server configuration.
 
 #### IM Channels
 

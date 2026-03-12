@@ -1,11 +1,92 @@
 import logging
 
+import httpx
 from langchain.chat_models import BaseChatModel
 
 from src.config import get_app_config, get_tracing_config, is_tracing_enabled
+from src.config.model_config import ModelOAuthConfig
 from src.reflection import resolve_class
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_oauth_model_credentials(model_settings: dict, oauth: ModelOAuthConfig) -> ModelOAuthConfig:
+    """Allow model-level oauth to inherit credentials from model settings.
+
+    For `refresh_token` grant, if `refresh_token` isn't explicitly configured,
+    we reuse `api_key` from model settings as the refresh token source.
+    """
+    if oauth.grant_type != "refresh_token" or oauth.refresh_token:
+        return oauth
+
+    api_key = model_settings.get("api_key")
+    if not api_key:
+        return oauth
+
+    return oauth.model_copy(update={"refresh_token": api_key})
+
+
+def _build_oauth_token_request_data(oauth: ModelOAuthConfig) -> dict[str, str]:
+    data: dict[str, str] = {
+        "grant_type": oauth.grant_type,
+        **oauth.extra_token_params,
+    }
+
+    if oauth.scope:
+        data["scope"] = oauth.scope
+    if oauth.audience:
+        data["audience"] = oauth.audience
+
+    if oauth.grant_type == "client_credentials":
+        if not oauth.client_id or not oauth.client_secret:
+            raise ValueError("OAuth client_credentials grant requires client_id and client_secret")
+        data["client_id"] = oauth.client_id
+        data["client_secret"] = oauth.client_secret
+    elif oauth.grant_type == "refresh_token":
+        if not oauth.refresh_token:
+            raise ValueError("OAuth refresh_token grant requires refresh_token")
+        data["refresh_token"] = oauth.refresh_token
+        if oauth.client_id:
+            data["client_id"] = oauth.client_id
+        if oauth.client_secret:
+            data["client_secret"] = oauth.client_secret
+    else:
+        raise ValueError(f"Unsupported OAuth grant type: {oauth.grant_type}")
+
+    return data
+
+
+def _fetch_oauth_access_token(oauth: ModelOAuthConfig) -> tuple[str, str]:
+    data = _build_oauth_token_request_data(oauth)
+
+    with httpx.Client(timeout=30) as client:
+        response = client.post(oauth.token_url, data=data)
+        response.raise_for_status()
+        payload = response.json()
+
+    access_token = payload.get(oauth.token_field)
+    if not access_token:
+        raise ValueError(f"OAuth token response missing '{oauth.token_field}'")
+
+    token_type = str(payload.get(oauth.token_type_field, oauth.default_token_type) or oauth.default_token_type)
+    return token_type, str(access_token)
+
+
+def _inject_model_oauth_credentials(model_settings: dict, oauth: ModelOAuthConfig | None) -> dict:
+    if oauth is None or not oauth.enabled:
+        return model_settings
+
+    resolved_oauth = _resolve_oauth_model_credentials(model_settings, oauth)
+    token_type, access_token = _fetch_oauth_access_token(resolved_oauth)
+
+    updated = dict(model_settings)
+    updated["api_key"] = access_token
+
+    headers = dict(updated.get("default_headers") or {})
+    headers["Authorization"] = f"{token_type} {access_token}".strip()
+    updated["default_headers"] = headers
+
+    return updated
 
 
 def create_chat_model(name: str | None = None, thinking_enabled: bool = False, **kwargs) -> BaseChatModel:
@@ -36,8 +117,10 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             "when_thinking_enabled",
             "thinking",
             "supports_vision",
+            "oauth",
         },
     )
+    model_settings_from_config = _inject_model_oauth_credentials(model_settings_from_config, model_config.oauth)
     # Compute effective when_thinking_enabled by merging in the `thinking` shortcut field.
     # The `thinking` shortcut is equivalent to setting when_thinking_enabled["thinking"].
     has_thinking_settings = (model_config.when_thinking_enabled is not None) or (model_config.thinking is not None)
