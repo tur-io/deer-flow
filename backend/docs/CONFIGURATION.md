@@ -43,7 +43,7 @@ models:
       # refresh_token is optional here; when omitted, `api_key` is reused
 ```
 
-Tokens are cached per model and refreshed when near expiry (`refresh_skew_seconds`).
+Tokens are cached per model+OAuth-config and refreshed when near expiry (`refresh_skew_seconds`).
 
 For OpenAI-compatible gateways (for example Novita), keep using `langchain_openai:ChatOpenAI` and set `base_url`:
 

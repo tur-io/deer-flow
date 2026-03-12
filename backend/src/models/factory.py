@@ -24,6 +24,20 @@ _MODEL_OAUTH_TOKEN_CACHE: dict[str, _ModelOAuthToken] = {}
 _MODEL_OAUTH_CACHE_LOCK = Lock()
 
 
+def _oauth_cache_key(model_name: str, oauth: ModelOAuthConfig) -> str:
+    """Build a stable cache key that invalidates when OAuth config changes."""
+    return "::".join(
+        [
+            model_name,
+            oauth.token_url,
+            oauth.grant_type,
+            oauth.client_id or "",
+            oauth.scope or "",
+            oauth.audience or "",
+        ]
+    )
+
+
 def _resolve_oauth_model_credentials(model_settings: dict, oauth: ModelOAuthConfig) -> ModelOAuthConfig:
     """Allow model-level oauth to inherit credentials from model settings.
 
@@ -95,6 +109,9 @@ def _fetch_oauth_access_token(oauth: ModelOAuthConfig) -> _ModelOAuthToken:
         response.raise_for_status()
         payload = response.json()
 
+    if not isinstance(payload, dict):
+        raise ValueError("OAuth token response must be a JSON object")
+
     return _parse_oauth_token_payload(payload, oauth)
 
 
@@ -104,13 +121,15 @@ def _is_token_expiring(token: _ModelOAuthToken, oauth: ModelOAuthConfig) -> bool
 
 
 def _get_cached_or_fetch_oauth_token(model_name: str, oauth: ModelOAuthConfig) -> _ModelOAuthToken:
+    cache_key = _oauth_cache_key(model_name, oauth)
+
     with _MODEL_OAUTH_CACHE_LOCK:
-        cached = _MODEL_OAUTH_TOKEN_CACHE.get(model_name)
+        cached = _MODEL_OAUTH_TOKEN_CACHE.get(cache_key)
         if cached and not _is_token_expiring(cached, oauth):
             return cached
 
         fresh = _fetch_oauth_access_token(oauth)
-        _MODEL_OAUTH_TOKEN_CACHE[model_name] = fresh
+        _MODEL_OAUTH_TOKEN_CACHE[cache_key] = fresh
         return fresh
 
 

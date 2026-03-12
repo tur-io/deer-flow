@@ -671,7 +671,8 @@ def test_get_cached_or_fetch_oauth_token_refreshes_when_expiring(monkeypatch):
         access_token="old",
         expires_at=factory_module.datetime.now(factory_module.UTC) + factory_module.timedelta(seconds=5),
     )
-    factory_module._MODEL_OAUTH_TOKEN_CACHE["model-a"] = near_expiry
+    cache_key = factory_module._oauth_cache_key("model-a", oauth)
+    factory_module._MODEL_OAUTH_TOKEN_CACHE[cache_key] = near_expiry
 
     monkeypatch.setattr(
         factory_module,
@@ -686,3 +687,44 @@ def test_get_cached_or_fetch_oauth_token_refreshes_when_expiring(monkeypatch):
     token = factory_module._get_cached_or_fetch_oauth_token("model-a", oauth)
 
     assert token.access_token == "new"
+
+
+def test_oauth_cache_key_changes_with_oauth_configuration():
+    base = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-1",
+            "client_secret": "secret",
+        },
+    ).oauth
+    changed = ModelConfig(
+        name="m",
+        display_name="m",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="m",
+        supports_vision=False,
+        oauth={
+            "enabled": True,
+            "token_url": "https://auth.example.com/oauth/token",
+            "grant_type": "client_credentials",
+            "client_id": "id-2",
+            "client_secret": "secret",
+        },
+    ).oauth
+
+    assert base is not None
+    assert changed is not None
+
+    key_a = factory_module._oauth_cache_key("model-a", base)
+    key_b = factory_module._oauth_cache_key("model-a", changed)
+
+    assert key_a != key_b
