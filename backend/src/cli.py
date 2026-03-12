@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +25,42 @@ def _save_yaml(path: Path, data: dict[str, Any]) -> None:
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
 
 
-def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool) -> tuple[bool, str]:
-    models = config_data.setdefault("models", [])
+def _ensure_models_list(config_data: dict[str, Any]) -> list[dict[str, Any]]:
+    models = config_data.get("models")
+
+    if models is None:
+        models = []
+    elif isinstance(models, dict):
+        nested_models = models.get("models") if isinstance(models.get("models"), list) else None
+        nested_providers = models.get("providers") if isinstance(models.get("providers"), list) else None
+
+        if nested_models is not None:
+            models = nested_models
+        elif nested_providers is not None:
+            models = nested_providers
+        else:
+            converted_models: list[dict[str, Any]] = []
+            for name, item in models.items():
+                if not isinstance(item, dict):
+                    continue
+                converted = dict(item)
+                converted.setdefault("name", name)
+                converted_models.append(converted)
+            models = converted_models
+
     if not isinstance(models, list):
-        raise ValueError("'models' must be a list in config.yaml")
+        raise ValueError("'models' must be a list or object in config.yaml")
+
+    for idx, item in enumerate(models):
+        if not isinstance(item, dict):
+            raise ValueError(f"'models[{idx}]' must be a YAML object")
+
+    config_data["models"] = models
+    return models
+
+
+def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool) -> tuple[bool, str]:
+    models = _ensure_models_list(config_data)
 
     model_entry = {
         "name": OPENAI_CODEX_PROVIDER,
@@ -61,6 +94,22 @@ def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool
     return created, f"{action} model '{OPENAI_CODEX_PROVIDER}' in config.yaml"
 
 
+def _print_openai_codex_auth_next_steps() -> None:
+    existing_key = os.getenv("OPENAI_API_KEY")
+    if existing_key:
+        masked = f"{existing_key[:7]}..." if len(existing_key) > 10 else "(set)"
+        print(f"Detected OPENAI_API_KEY in environment: {masked}")
+        print("You're ready to start DeerFlow with OpenAI Codex.")
+        return
+
+    print("Next step: create an OpenAI API key and set OPENAI_API_KEY before starting DeerFlow.")
+    print("1) Create a key at: https://platform.openai.com/api-keys")
+    print("2) Set it for your current shell:")
+    print("   export OPENAI_API_KEY='sk-...'")
+    print("3) Optional: persist it in a local .env file:")
+    print("   echo \"OPENAI_API_KEY=sk-...\" >> .env")
+
+
 def _cmd_models_auth_login(args: argparse.Namespace) -> int:
     if args.provider != OPENAI_CODEX_PROVIDER:
         raise ValueError(f"Unsupported provider '{args.provider}'. Currently supported: {OPENAI_CODEX_PROVIDER}")
@@ -72,7 +121,7 @@ def _cmd_models_auth_login(args: argparse.Namespace) -> int:
 
     print(message)
     print(f"Config updated: {config_path}")
-    print("Next step: set OPENAI_API_KEY in your environment before starting DeerFlow.")
+    _print_openai_codex_auth_next_steps()
     return 0
 
 

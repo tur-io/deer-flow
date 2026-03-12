@@ -311,6 +311,10 @@ make format     # Format code (ruff)
 uv run deerflow models auth login --provider openai-codex --set-default  # Add/update OpenAI Codex model in config.yaml
 ```
 
+- CLI packaging is configured via `setuptools.build_meta` in `pyproject.toml` so `uv run deerflow ...` resolves the `deerflow` entrypoint correctly.
+- `deerflow models auth login` accepts both list-based and legacy object-based `models` config shapes, and normalizes them to a list when writing back.
+- `deerflow models auth login --provider openai-codex` now prints actionable token setup steps (or confirms when `OPENAI_API_KEY` is already set).
+
 ### Code Style
 
 - **Linter/Formatter**: `ruff`
