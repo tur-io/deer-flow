@@ -457,7 +457,8 @@ For models with `supports_vision: true`:
 
 - CLI packaging is configured via `setuptools.build_meta` in `pyproject.toml` so `uv run deerflow ...` resolves the `deerflow` entrypoint correctly.
 - `deerflow models auth login` accepts both list-based and legacy object-based `models` config shapes, and normalizes them to a list when writing back.
-- `deerflow models auth login --provider openai-codex` now prints actionable token setup steps (or confirms when `OPENAI_API_KEY` is already set).
+- `deerflow models auth login --provider openai-codex` now runs an OpenAI Codex OAuth browser flow and writes the returned refresh token into model-level `oauth` config.
+- Use `--no-oauth` to skip OAuth login and keep API-key-only setup guidance.
 
 ## Code Style
 
