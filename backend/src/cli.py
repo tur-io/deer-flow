@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import json
 import os
+import secrets
+import threading
+import urllib.parse
+import urllib.request
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +19,37 @@ import yaml
 from src.config.app_config import AppConfig
 
 OPENAI_CODEX_PROVIDER = "openai-codex"
+OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+OPENAI_CODEX_REDIRECT_URI = "http://localhost:1455/auth/callback"
+OPENAI_CODEX_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
+OPENAI_CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
+OPENAI_CODEX_SCOPE = "openid profile email offline_access"
+
+
+class _OAuthCallbackHandler(BaseHTTPRequestHandler):
+    server: _OAuthHTTPServer
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/auth/callback":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        query = urllib.parse.parse_qs(parsed.query)
+        self.server.callback_query = {key: values[0] for key, values in query.items() if values}
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"<html><body><h2>OpenAI OAuth complete. You can close this tab.</h2></body></html>")
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+
+class _OAuthHTTPServer(HTTPServer):
+    callback_query: dict[str, str] | None
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -59,7 +99,7 @@ def _ensure_models_list(config_data: dict[str, Any]) -> list[dict[str, Any]]:
     return models
 
 
-def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool) -> tuple[bool, str]:
+def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool, oauth_credential: dict[str, Any] | None = None) -> tuple[bool, str]:
     models = _ensure_models_list(config_data)
 
     model_entry = {
@@ -72,6 +112,18 @@ def _upsert_openai_codex_model(config_data: dict[str, Any], *, set_default: bool
         "supports_vision": True,
         "supports_reasoning_effort": True,
     }
+
+    if oauth_credential is not None:
+        oauth_block: dict[str, Any] = {
+            "enabled": True,
+            "token_url": OPENAI_CODEX_OAUTH_TOKEN_URL,
+            "grant_type": "refresh_token",
+            "refresh_token": oauth_credential["refresh_token"],
+        }
+        client_id = oauth_credential.get("client_id")
+        if isinstance(client_id, str) and client_id.strip():
+            oauth_block["client_id"] = client_id
+        model_entry["oauth"] = oauth_block
 
     existing_index = next((i for i, item in enumerate(models) if isinstance(item, dict) and item.get("name") == OPENAI_CODEX_PROVIDER), None)
     created = existing_index is None
@@ -107,7 +159,141 @@ def _print_openai_codex_auth_next_steps() -> None:
     print("2) Set it for your current shell:")
     print("   export OPENAI_API_KEY='sk-...'")
     print("3) Optional: persist it in a local .env file:")
-    print("   echo \"OPENAI_API_KEY=sk-...\" >> .env")
+    print('   echo "OPENAI_API_KEY=sk-..." >> .env')
+
+
+def _base64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def _build_openai_codex_authorize_url(*, state: str, code_challenge: str, redirect_uri: str) -> str:
+    params = {
+        "response_type": "code",
+        "client_id": OPENAI_CODEX_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "scope": OPENAI_CODEX_SCOPE,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
+        "originator": "pi",
+    }
+    return f"{OPENAI_CODEX_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
+
+
+def _capture_oauth_callback_code(*, expected_state: str, timeout_seconds: int, redirect_uri: str) -> str | None:
+    parsed = urllib.parse.urlparse(redirect_uri)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 80
+
+    server = _OAuthHTTPServer((host, port), _OAuthCallbackHandler)
+    server.callback_query = None
+
+    event = threading.Event()
+
+    def _serve_one() -> None:
+        try:
+            server.handle_request()
+        finally:
+            event.set()
+            server.server_close()
+
+    thread = threading.Thread(target=_serve_one, daemon=True)
+    thread.start()
+    event.wait(timeout_seconds)
+
+    if not server.callback_query:
+        return None
+
+    state = server.callback_query.get("state")
+    if state != expected_state:
+        raise ValueError("OAuth state mismatch. Please retry login.")
+
+    code = server.callback_query.get("code")
+    if not code:
+        raise ValueError("OAuth callback did not include an authorization code.")
+    return code
+
+
+def _parse_redirect_url_for_code(*, redirect_url: str, expected_state: str) -> str:
+    parsed = urllib.parse.urlparse(redirect_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    state = query.get("state", [None])[0]
+    if state != expected_state:
+        raise ValueError("OAuth state mismatch in pasted redirect URL. Please retry login.")
+    code = query.get("code", [None])[0]
+    if not code:
+        raise ValueError("Pasted redirect URL does not contain an OAuth code.")
+    return code
+
+
+def _exchange_openai_codex_oauth_token(*, code: str, code_verifier: str, redirect_uri: str) -> dict[str, Any]:
+    payload = urllib.parse.urlencode(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": OPENAI_CODEX_CLIENT_ID,
+            "code_verifier": code_verifier,
+        }
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        OPENAI_CODEX_OAUTH_TOKEN_URL,
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+        body = json.loads(response.read().decode("utf-8"))
+
+    if not isinstance(body, dict):
+        raise ValueError("OAuth token response was not a JSON object.")
+
+    refresh_token = body.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token.strip():
+        raise ValueError("OAuth token response is missing refresh_token.")
+
+    return {
+        "refresh_token": refresh_token,
+        "client_id": OPENAI_CODEX_CLIENT_ID,
+    }
+
+
+def _login_openai_codex_oauth(*, timeout_seconds: int = 120) -> dict[str, Any]:
+    code_verifier = _base64url(secrets.token_bytes(64))
+    code_challenge = _base64url(hashlib.sha256(code_verifier.encode("utf-8")).digest())
+    state = secrets.token_hex(16)
+
+    authorize_url = _build_openai_codex_authorize_url(
+        state=state,
+        code_challenge=code_challenge,
+        redirect_uri=OPENAI_CODEX_REDIRECT_URI,
+    )
+
+    print("OpenAI Codex OAuth")
+    print("Browser will open for OpenAI authentication.")
+    print("If the callback does not auto-complete, paste the redirect URL.")
+    print(f"Open: {authorize_url}")
+
+    webbrowser.open(authorize_url)
+
+    code = _capture_oauth_callback_code(
+        expected_state=state,
+        timeout_seconds=timeout_seconds,
+        redirect_uri=OPENAI_CODEX_REDIRECT_URI,
+    )
+    if code is None:
+        redirect_url = input("Paste redirect URL: ").strip()
+        code = _parse_redirect_url_for_code(redirect_url=redirect_url, expected_state=state)
+
+    return _exchange_openai_codex_oauth_token(
+        code=code,
+        code_verifier=code_verifier,
+        redirect_uri=OPENAI_CODEX_REDIRECT_URI,
+    )
 
 
 def _cmd_models_auth_login(args: argparse.Namespace) -> int:
@@ -116,12 +302,20 @@ def _cmd_models_auth_login(args: argparse.Namespace) -> int:
 
     config_path = AppConfig.resolve_config_path(args.config)
     config_data = _load_yaml(config_path)
-    _, message = _upsert_openai_codex_model(config_data, set_default=args.set_default)
+
+    oauth_credential = None
+    if args.oauth:
+        oauth_credential = _login_openai_codex_oauth()
+
+    _, message = _upsert_openai_codex_model(config_data, set_default=args.set_default, oauth_credential=oauth_credential)
     _save_yaml(config_path, config_data)
 
     print(message)
     print(f"Config updated: {config_path}")
-    _print_openai_codex_auth_next_steps()
+    if oauth_credential is not None:
+        print("OpenAI Codex OAuth token saved to model oauth config.")
+    else:
+        _print_openai_codex_auth_next_steps()
     return 0
 
 
@@ -138,6 +332,12 @@ def build_parser() -> argparse.ArgumentParser:
     login_parser = auth_subparsers.add_parser("login", help="Configure model auth provider")
     login_parser.add_argument("--provider", required=True, help="Provider to configure")
     login_parser.add_argument("--set-default", action="store_true", help="Move this provider to the top of models list")
+    login_parser.add_argument(
+        "--oauth",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run OpenAI Codex OAuth flow to fetch a refresh token and write model-level oauth config",
+    )
     login_parser.add_argument("--config", default=None, help="Path to config.yaml (optional)")
     login_parser.set_defaults(func=_cmd_models_auth_login)
 
