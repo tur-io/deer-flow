@@ -308,7 +308,13 @@ make dev        # Run LangGraph server (port 2024)
 make gateway    # Run Gateway API (port 8001)
 make lint       # Run linter (ruff)
 make format     # Format code (ruff)
+uv run deerflow models auth login --provider openai-codex --set-default  # Add/update OpenAI Codex model in config.yaml
 ```
+
+- CLI packaging is configured via `setuptools.build_meta` in `pyproject.toml` so `uv run deerflow ...` resolves the `deerflow` entrypoint correctly.
+- `deerflow models auth login` accepts both list-based and legacy object-based `models` config shapes, and normalizes them to a list when writing back.
+- `deerflow models auth login --provider openai-codex` now runs an OpenAI Codex OAuth browser flow and writes the returned refresh token into model-level `oauth` config.
+- Use `--no-oauth` to skip OAuth login and keep API-key-only setup guidance.
 
 ### Code Style
 

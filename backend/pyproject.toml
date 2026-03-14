@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "deer-flow"
 version = "0.1.0"
@@ -40,6 +44,13 @@ dependencies = [
     "langgraph-sdk>=0.1.51",
     "markdown-to-mrkdwn>=0.3.1",
 ]
+
+[project.scripts]
+deerflow = "src.cli:main"
+
+
+[tool.setuptools.packages.find]
+include = ["src*"]
 
 [dependency-groups]
 dev = ["pytest>=8.0.0", "ruff>=0.14.11"]
