@@ -84,9 +84,10 @@ def test_make_lead_agent_disables_thinking_when_model_does_not_support_it(monkey
 
     captured: dict[str, object] = {}
 
-    def _fake_create_chat_model(*, name, thinking_enabled, reasoning_effort=None):
+    def _fake_create_chat_model(*, name, thinking_enabled, mode=None, reasoning_effort=None):
         captured["name"] = name
         captured["thinking_enabled"] = thinking_enabled
+        captured["mode"] = mode
         captured["reasoning_effort"] = reasoning_effort
         return object()
 

@@ -29,6 +29,7 @@ def _make_model(
     supports_thinking: bool = False,
     supports_reasoning_effort: bool = False,
     when_thinking_enabled: dict | None = None,
+    mode_overrides: dict | None = None,
     thinking: dict | None = None,
 ) -> ModelConfig:
     return ModelConfig(
@@ -39,6 +40,7 @@ def _make_model(
         model=name,
         supports_thinking=supports_thinking,
         supports_reasoning_effort=supports_reasoning_effort,
+        mode_overrides=mode_overrides,
         when_thinking_enabled=when_thinking_enabled,
         thinking=thinking,
         supports_vision=False,
@@ -135,6 +137,36 @@ def test_thinking_enabled_merges_when_thinking_enabled_settings(monkeypatch):
 
     assert FakeChatModel.captured_kwargs.get("temperature") == 1.0
     assert FakeChatModel.captured_kwargs.get("max_tokens") == 16000
+
+
+def test_mode_overrides_applied_and_deep_merged(monkeypatch):
+    cfg = _make_app_config(
+        [
+            _make_model(
+                "mode-model",
+                supports_thinking=True,
+                mode_overrides={
+                    "flash": {
+                        "temperature": 0.2,
+                        "extra_body": {
+                            "chat_template_kwargs": {"enable_thinking": False},
+                            "top_k": 20,
+                        },
+                    }
+                },
+            )
+        ]
+    )
+    _patch_factory(monkeypatch, cfg)
+
+    FakeChatModel.captured_kwargs = {}
+    factory_module.create_chat_model(name="mode-model", thinking_enabled=False, mode="flash")
+
+    assert FakeChatModel.captured_kwargs.get("temperature") == 0.2
+    assert FakeChatModel.captured_kwargs.get("extra_body") == {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "top_k": 20,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,18 @@ from src.reflection import resolve_class
 
 logger = logging.getLogger(__name__)
 
+def _deep_merge_dict(base: dict, override: dict) -> dict:
+    """Deep-merge override into base (dicts only), returning a new dict."""
+    out = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge_dict(out[k], v)
+        else:
+            out[k] = v
+    return out
 
-def create_chat_model(name: str | None = None, thinking_enabled: bool = False, **kwargs) -> BaseChatModel:
+
+def create_chat_model(name: str | None = None, thinking_enabled: bool = False, mode: str | None = None, **kwargs) -> BaseChatModel:
     """Create a chat model instance from the config.
 
     Args:
@@ -33,11 +43,20 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             "description",
             "supports_thinking",
             "supports_reasoning_effort",
+            "mode_overrides",
             "when_thinking_enabled",
             "thinking",
             "supports_vision",
         },
     )
+
+    # Apply optional per-mode overrides (e.g. flash/thinking/pro/ultra) before thinking logic.
+    # This lets a mode override control sampling params and request body fields like chat_template_kwargs.enable_thinking.
+    if mode and getattr(model_config, "mode_overrides", None):
+        overrides = model_config.mode_overrides or {}
+        if isinstance(overrides, dict) and mode in overrides and isinstance(overrides[mode], dict):
+            model_settings_from_config = _deep_merge_dict(model_settings_from_config, overrides[mode])
+
     # Compute effective when_thinking_enabled by merging in the `thinking` shortcut field.
     # The `thinking` shortcut is equivalent to setting when_thinking_enabled["thinking"].
     has_thinking_settings = (model_config.when_thinking_enabled is not None) or (model_config.thinking is not None)

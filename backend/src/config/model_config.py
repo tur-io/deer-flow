@@ -20,6 +20,14 @@ class ModelConfig(BaseModel):
         description="Extra settings to be passed to the model when thinking is enabled",
     )
     supports_vision: bool = Field(default_factory=lambda: False, description="Whether the model supports vision/image inputs")
+    mode_overrides: dict | None = Field(
+        default_factory=lambda: None,
+        description=(
+            "Optional per-chat-mode overrides applied at runtime. "
+            "Keys should be UI modes like 'flash', 'thinking', 'pro', 'ultra'. "
+            "Values are dicts of model constructor kwargs (e.g. temperature, top_p, extra_body)."
+        ),
+    )
     thinking: dict | None = Field(
         default_factory=lambda: None,
         description=(
